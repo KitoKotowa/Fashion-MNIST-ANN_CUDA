@@ -1,123 +1,133 @@
-#include <Eigen/Dense>
 #include <iostream>
 #include <vector>
 #include <random>
 #include <cmath>
+#include <cuda_runtime.h>
+#include <curand.h>
+#include <curand_kernel.h>
 
 using namespace std;
 
-class NeuralNetwork {
+#define BLOCK_SIZE 256 
+#define CHECK(call) \
+{ \
+    const cudaError_t error = call; \
+    if (error != cudaSuccess) \
+    { \
+        cerr << "Error: " << __FILE__ << ":" << __LINE__ << ", "; \
+        cerr << "code: " << error << ", reason: " << cudaGetErrorString(error) << endl; \
+        throw runtime_error(cudaGetErrorString(error)); \
+    } \
+}
+
+class NeuralNetworkCUDA {
 private:
     const int input_size = 784;
     const int hidden1_size = 128;
     const int hidden2_size = 128; 
     const int output_size = 10;
-    const double learning_rate = 0.01;
+    const float learning_rate = 0.01;
 
-    MatrixXd W1, W2, W3;
-    VectorXd b1, b2, b3;
+    float *d_W1, *d_W2, *d_W3;
+    float *d_b1, *d_b2, *d_b3;
+    float *d_input, *d_z1, *d_a1, *d_z2, *d_a2, *d_z3, *d_output;
+    float *d_target, *d_dZ3, *d_dZ2, *d_dZ1;
 
-    // Activation function (ReLU)
-    MatrixXd relu(const MatrixXd& x) {
-        return x.array().max(0);
+    vector<float> h_W1, h_W2, h_W3;
+    vector<float> h_b1, h_b2, h_b3;
+
+    void allocate_memory() {
+        // Weights and biases
+        cudaMalloc(&d_W1, hidden1_size * input_size * sizeof(float));
+        cudaMalloc(&d_W2, hidden2_size * hidden1_size * sizeof(float));
+        cudaMalloc(&d_W3, output_size * hidden2_size * sizeof(float));
+        
+        cudaMalloc(&d_b1, hidden1_size * sizeof(float));   
+        cudaMalloc(&d_b2, hidden2_size * sizeof(float));
+        cudaMalloc(&d_b3, output_size * sizeof(float));
     }
 
-    MatrixXd relu_derivative(const MatrixXd& x) {
-        return (x.array() > 0).cast<double>();
-    }
-
-    // Softmax activation
-    MatrixXd softmax(const MatrixXd& x) {
-        MatrixXd exp_x = x.array().exp();
-        return exp_x.array().colwise() / exp_x.colwise().sum().array();
-    }
-
-public:
-    NeuralNetwork() {
-        // Initialize random number generator
+    void initialize_weights() {
         random_device rd;
         mt19937 gen(rd());
-        normal_distribution<double> dist(0.0, sqrt(2.0/input_size));
+        normal_distribution<float> d(0, 0.01);
 
-        // Initialize weights and biases
-        W1 = MatrixXd::Zero(hidden1_size, input_size);
-        W2 = MatrixXd::Zero(hidden2_size, hidden1_size);
-        W3 = MatrixXd::Zero(output_size, hidden2_size);
+        // Xavier/Glorot initialization
+        h_W1.resize(hidden1_size * input_size);
+        h_W2.resize(hidden2_size * hidden1_size);
+        h_W3.resize(output_size * hidden2_size);
         
-        b1 = VectorXd::Zero(hidden1_size);
-        b2 = VectorXd::Zero(hidden2_size);
-        b3 = VectorXd::Zero(output_size);
+        h_b1.resize(hidden1_size, 0.0f);
+        h_b2.resize(hidden2_size, 0.0f);
+        h_b3.resize(output_size, 0.0f);
 
-        // Random initialization
-        for(int i = 0; i < W1.rows(); i++)
-            for(int j = 0; j < W1.cols(); j++)
-                W1(i,j) = dist(gen);
-
-        for(int i = 0; i < W2.rows(); i++)
-            for(int j = 0; j < W2.cols(); j++)
-                W2(i,j) = dist(gen);
-
-        for(int i = 0; i < W3.rows(); i++)
-            for(int j = 0; j < W3.cols(); j++)
-                W3(i,j) = dist(gen);
-    }
-
-    MatrixXd forward(const MatrixXd& X) {
-        // Forward propagation
-        MatrixXd z1 = W1 * X + b1 * MatrixXd::Ones(1, X.cols());
-        MatrixXd a1 = relu(z1);
-        
-        MatrixXd z2 = W2 * a1 + b2 * MatrixXd::Ones(1, X.cols());
-        MatrixXd a2 = relu(z2);
-        
-        MatrixXd z3 = W3 * a2 + b3 * MatrixXd::Ones(1, X.cols());
-        return softmax(z3);
-    }
-
-    void train(const MatrixXd& X, const MatrixXd& y, int epochs, int batch_size) {
-        int n_samples = X.cols();
-        int n_batches = n_samples / batch_size;
-
-        for(int epoch = 0; epoch < epochs; epoch++) {
-            double total_loss = 0;
-
-            for(int batch = 0; batch < n_batches; batch++) {
-                int start_idx = batch * batch_size;
-                MatrixXd X_batch = X.block(0, start_idx, X.rows(), batch_size);
-                MatrixXd y_batch = y.block(0, start_idx, y.rows(), batch_size);
-
-                // Forward pass
-                MatrixXd z1 = W1 * X_batch + b1 * MatrixXd::Ones(1, batch_size);
-                MatrixXd a1 = relu(z1);
-                
-                MatrixXd z2 = W2 * a1 + b2 * MatrixXd::Ones(1, batch_size);
-                MatrixXd a2 = relu(z2);
-                
-                MatrixXd z3 = W3 * a2 + b3 * MatrixXd::Ones(1, batch_size);
-                MatrixXd yhat = softmax(z3);
-
-                // Backward pass
-                MatrixXd delta3 = yhat - y_batch;
-                MatrixXd delta2 = (W3.transpose() * delta3).array() * relu_derivative(z2).array();
-                MatrixXd delta1 = (W2.transpose() * delta2).array() * relu_derivative(z1).array();
-
-                // Update weights and biases
-                W3 -= learning_rate * (delta3 * a2.transpose()) / batch_size;
-                W2 -= learning_rate * (delta2 * a1.transpose()) / batch_size;
-                W1 -= learning_rate * (delta1 * X_batch.transpose()) / batch_size;
-                
-                b3 -= learning_rate * delta3.rowwise().mean();
-                b2 -= learning_rate * delta2.rowwise().mean();
-                b1 -= learning_rate * delta1.rowwise().mean();
-
-                // Calculate loss
-                total_loss -= (y_batch.array() * yhat.array().log()).sum() / batch_size;
-            }
-
-            if(epoch % 5 == 0) {
-                cout << "Epoch " << epoch << ", Loss: " << total_loss/n_batches << endl;
-            }
+        for (int i = 0; i < h_W1.size(); ++i) {
+            h_W1[i] = d(gen) * sqrt(2.0f / (input_size + hidden1_size));
         }
+
+        for (int i = 0; i < h_W2.size(); ++i) {
+            h_W2[i] = d(gen) * sqrt(2.0f / (hidden1_size + hidden2_size));
+        }
+
+        for (int i = 0; i < h_W3.size(); ++i) {
+            h_W3[i] = d(gen) * sqrt(2.0f / (hidden2_size + output_size));
+        }
+
+        cudaMemcpy(d_W1, h_W1.data(), h_W1.size() * sizeof(float), cudaMemcpyHostToDevice);
+        cudaMemcpy(d_W2, h_W2.data(), h_W2.size() * sizeof(float), cudaMemcpyHostToDevice);
+        cudaMemcpy(d_W3, h_W3.data(), h_W3.size() * sizeof(float), cudaMemcpyHostToDevice);
+
+        cudaMemcpy(d_b1, h_b1.data(), h_b1.size() * sizeof(float), cudaMemcpyHostToDevice);
+        cudaMemcpy(d_b2, h_b2.data(), h_b2.size() * sizeof(float), cudaMemcpyHostToDevice);
+        cudaMemcpy(d_b3, h_b3.data(), h_b3.size() * sizeof(float), cudaMemcpyHostToDevice);
+    }
+    void forward_propagation() {
+        cudaMemcpy(d_input, h_input, input_size * sizeof(float), cudaMemcpyHostToDevice);
+
+        // First hidden layer
+        // TODO: Implement CUDA kernels for matrix multiplication
+        // Placeholder for CUDA gemm (general matrix multiplication)
+        
+        // ReLU activation
+        int blocks1 = (hidden1_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        relu_kernel<<<blocks1, BLOCK_SIZE>>>(d_z1, d_a1, hidden1_size);
+        
+        // Second hidden layer
+        // TODO: Similar matrix multiplication kernel
+        
+        // ReLU activation
+        int blocks2 = (hidden2_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        relu_kernel<<<blocks2, BLOCK_SIZE>>>(d_z2, d_a2, hidden2_size);
+        
+        // Output layer
+        // TODO: Final matrix multiplication
+        
+        // Softmax
+        int blocks3 = (output_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        softmax_kernel<<<blocks3, BLOCK_SIZE>>>(d_z3, d_output, output_size);
+    }
+public: 
+    NeuralNetworkCUDA() {
+        allocate_gpu_memory();
+        initialize_weights();
+    }
+
+    ~NeuralNetworkCUDA() {
+        // Free GPU memory
+        cudaFree(d_W1); cudaFree(d_W2); cudaFree(d_W3);
+        cudaFree(d_b1); cudaFree(d_b2); cudaFree(d_b3);
+        cudaFree(d_input); cudaFree(d_z1); cudaFree(d_a1);
+        cudaFree(d_z2); cudaFree(d_a2); cudaFree(d_z3);
+        cudaFree(d_output); cudaFree(d_target);
+        cudaFree(d_dZ3); cudaFree(d_dZ2); cudaFree(d_dZ1);
+    }
+
+    void train(const vector<vector<float>>& training_data, 
+               const vector<int>& labels, 
+               int epochs = 5, 
+               float learning_rate = 0.01) {
+        //TODO: Train here
+    
     }
 };
 
@@ -175,7 +185,7 @@ __global__ void softmax_kernel(float* input, float* output, int size) {
     }
 }
 
-bool loadFashionMNIST(vector<vector<double>>& images,
+bool loadFashionMNIST(vector<vector<float>>& images,
                       vector<int>& labels,
                       const string& image_file,
                       const string& label_file) {
@@ -205,7 +215,7 @@ bool loadFashionMNIST(vector<vector<double>>& images,
     num_cols = __builtin_bswap32(num_cols);
     
     // Read images and labels
-    images.resize(num_images, vector<double>(num_rows * num_cols));
+    images.resize(num_images, vector<float>(num_rows * num_cols));
     labels.resize(num_images);
     
     for (int i = 0; i < num_images; ++i) {
@@ -213,7 +223,7 @@ bool loadFashionMNIST(vector<vector<double>>& images,
             unsigned char pixel = 0;
             file_images.read(reinterpret_cast<char*>(&pixel), sizeof(pixel));
             if (file_images.fail()) {
-                std::cerr << "Error reading image data." << std::endl;
+                cerr << "Error reading image data." << endl;
                 return false;
             }
             images[i][j] = pixel / 255.0; // Normalize to [0, 1]
@@ -222,7 +232,7 @@ bool loadFashionMNIST(vector<vector<double>>& images,
         unsigned char label = 0;
         file_labels.read(reinterpret_cast<char*>(&label), sizeof(label));
         if (file_labels.fail()) {
-            std::cerr << "Error reading label data." << std::endl;
+            cerr << "Error reading label data." << endl;
             return false;
         }
         labels[i] = static_cast<int>(label);
@@ -231,23 +241,23 @@ bool loadFashionMNIST(vector<vector<double>>& images,
     return true;
 }
 
-void printTrainingData(const std::vector<std::vector<double>>& images,
-                       const std::vector<int>& labels, int count) {
+void printTrainingData(const vector<vector<float>>& images,
+                       const vector<int>& labels, int count) {
     for (int i = 0; i < count && i < images.size(); ++i) {
         cout.precision(2);
-        std::cout << "Sample " << i + 1 << ":\n";
-        std::cout << "Label: " << labels[i] << "\n";
-        std::cout << "Image (Flattened):\n";
+        cout << "Sample " << i + 1 << ":\n";
+        cout << "Label: " << labels[i] << "\n";
+        cout << "Image (Flattened):\n";
         for (int j = 0; j < images[i].size(); ++j) {
-            std::cout << images[i][j] << " ";
-            if ((j + 1) % 28 == 0) std::cout << "\n"; // Format into 28 pixels per row
+            cout << images[i][j] << " ";
+            if ((j + 1) % 28 == 0) cout << "\n"; // Format into 28 pixels per row
         }
-        std::cout << "\n" << std::string(40, '-') << "\n";
+        cout << "\n" << string(40, '-') << "\n";
     }
 }
 
 int main() {
-    vector<vector<double>> images;
+    vector<vector<float>> images;
     vector<int> labels;
     
     string image_file = "train-images-idx3-ubyte";
@@ -262,7 +272,7 @@ int main() {
     cout << "Printing the first 5 samples:\n"; 
     printTrainingData(images, labels, 5);
 
-    // Convert vector<vector<double>> to Eigen::MatrixXd
+    // Convert vector<vector<float>> to Eigen::MatrixXd
     MatrixXd training_data(images.size(), images[0].size());
     for (size_t i = 0; i < images.size(); i++) {
         for (size_t j = 0; j < images[i].size(); j++) {
@@ -277,7 +287,7 @@ int main() {
     }
 
     // Create and train neural network
-    NeuralNetwork nn;
+    NeuralNetworkCUDA nn;
     cout << "Training neural network...\n";
     nn.train(training_data, training_labels);
     cout << "Training complete!\n";
