@@ -271,7 +271,7 @@ int main() {
     cout << "Loaded " << images.size() << " training samples.\n";
     cout << "Printing the first 5 samples:\n"; 
     printTrainingData(images, labels, 5);
-
+    //TODO: Change to fit the data types in the class, not Eigen::MatrixMatrix
     // Convert vector<vector<float>> to Eigen::MatrixXd
     MatrixXd training_data(images.size(), images[0].size());
     for (size_t i = 0; i < images.size(); i++) {
