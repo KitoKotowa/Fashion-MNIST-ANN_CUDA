@@ -5,6 +5,7 @@
 #include <cuda_runtime.h>
 #include <curand.h>
 #include <curand_kernel.h>
+#include <fstream>
 
 using namespace std;
 
@@ -19,117 +20,6 @@ using namespace std;
         throw runtime_error(cudaGetErrorString(error)); \
     } \
 }
-
-class NeuralNetworkCUDA {
-private:
-    const int input_size = 784;
-    const int hidden1_size = 128;
-    const int hidden2_size = 128; 
-    const int output_size = 10;
-    const float learning_rate = 0.01;
-
-    float *d_W1, *d_W2, *d_W3;
-    float *d_b1, *d_b2, *d_b3;
-    float *d_input, *d_z1, *d_a1, *d_z2, *d_a2, *d_z3, *d_output;
-    float *d_target, *d_dZ3, *d_dZ2, *d_dZ1;
-
-    vector<float> h_W1, h_W2, h_W3;
-    vector<float> h_b1, h_b2, h_b3;
-
-    void allocate_memory() {
-        // Weights and biases
-        cudaMalloc(&d_W1, hidden1_size * input_size * sizeof(float));
-        cudaMalloc(&d_W2, hidden2_size * hidden1_size * sizeof(float));
-        cudaMalloc(&d_W3, output_size * hidden2_size * sizeof(float));
-        
-        cudaMalloc(&d_b1, hidden1_size * sizeof(float));   
-        cudaMalloc(&d_b2, hidden2_size * sizeof(float));
-        cudaMalloc(&d_b3, output_size * sizeof(float));
-    }
-
-    void initialize_weights() {
-        random_device rd;
-        mt19937 gen(rd());
-        normal_distribution<float> d(0, 0.01);
-
-        // Xavier/Glorot initialization
-        h_W1.resize(hidden1_size * input_size);
-        h_W2.resize(hidden2_size * hidden1_size);
-        h_W3.resize(output_size * hidden2_size);
-        
-        h_b1.resize(hidden1_size, 0.0f);
-        h_b2.resize(hidden2_size, 0.0f);
-        h_b3.resize(output_size, 0.0f);
-
-        for (int i = 0; i < h_W1.size(); ++i) {
-            h_W1[i] = d(gen) * sqrt(2.0f / (input_size + hidden1_size));
-        }
-
-        for (int i = 0; i < h_W2.size(); ++i) {
-            h_W2[i] = d(gen) * sqrt(2.0f / (hidden1_size + hidden2_size));
-        }
-
-        for (int i = 0; i < h_W3.size(); ++i) {
-            h_W3[i] = d(gen) * sqrt(2.0f / (hidden2_size + output_size));
-        }
-
-        cudaMemcpy(d_W1, h_W1.data(), h_W1.size() * sizeof(float), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_W2, h_W2.data(), h_W2.size() * sizeof(float), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_W3, h_W3.data(), h_W3.size() * sizeof(float), cudaMemcpyHostToDevice);
-
-        cudaMemcpy(d_b1, h_b1.data(), h_b1.size() * sizeof(float), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_b2, h_b2.data(), h_b2.size() * sizeof(float), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_b3, h_b3.data(), h_b3.size() * sizeof(float), cudaMemcpyHostToDevice);
-    }
-    void forward_propagation() {
-        cudaMemcpy(d_input, h_input, input_size * sizeof(float), cudaMemcpyHostToDevice);
-
-        // First hidden layer
-        // TODO: Implement CUDA kernels for matrix multiplication
-        // Placeholder for CUDA gemm (general matrix multiplication)
-        
-        // ReLU activation
-        int blocks1 = (hidden1_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        relu_kernel<<<blocks1, BLOCK_SIZE>>>(d_z1, d_a1, hidden1_size);
-        
-        // Second hidden layer
-        // TODO: Similar matrix multiplication kernel
-        
-        // ReLU activation
-        int blocks2 = (hidden2_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        relu_kernel<<<blocks2, BLOCK_SIZE>>>(d_z2, d_a2, hidden2_size);
-        
-        // Output layer
-        // TODO: Final matrix multiplication
-        
-        // Softmax
-        int blocks3 = (output_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        softmax_kernel<<<blocks3, BLOCK_SIZE>>>(d_z3, d_output, output_size);
-    }
-public: 
-    NeuralNetworkCUDA() {
-        allocate_gpu_memory();
-        initialize_weights();
-    }
-
-    ~NeuralNetworkCUDA() {
-        // Free GPU memory
-        cudaFree(d_W1); cudaFree(d_W2); cudaFree(d_W3);
-        cudaFree(d_b1); cudaFree(d_b2); cudaFree(d_b3);
-        cudaFree(d_input); cudaFree(d_z1); cudaFree(d_a1);
-        cudaFree(d_z2); cudaFree(d_a2); cudaFree(d_z3);
-        cudaFree(d_output); cudaFree(d_target);
-        cudaFree(d_dZ3); cudaFree(d_dZ2); cudaFree(d_dZ1);
-    }
-
-    void train(const vector<vector<float>>& training_data, 
-               const vector<int>& labels, 
-               int epochs = 5, 
-               float learning_rate = 0.01) {
-        //TODO: Train here
-    
-    }
-};
 
 __global__ void relu_kernel(float* input, float* output, int size) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -184,6 +74,188 @@ __global__ void softmax_kernel(float* input, float* output, int size) {
         output[idx] = exp(input[idx] - max_val) / sum;
     }
 }
+
+__global__ void matrix_multiply_kernel(float* A, float* B, float* bias, float* C, 
+                                     int M, int N, int K) {
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (row < M && col < K) {
+        float sum = 0.0f;
+        for (int i = 0; i < N; i++) {
+            sum += A[row * N + i] * B[i * K + col];
+        }
+
+        C[row * K + col] = sum + bias[row];
+    }
+}
+
+class NeuralNetworkCUDA {
+private:
+    const int input_size = 784;
+    const int hidden1_size = 128;
+    const int hidden2_size = 128; 
+    const int output_size = 10;
+    const float learning_rate = 0.01;
+
+    float *d_W1, *d_W2, *d_W3;
+    float *d_b1, *d_b2, *d_b3;
+    float *d_input, *d_z1, *d_a1, *d_z2, *d_a2, *d_z3, *d_output;
+    float *d_target, *d_dZ3, *d_dZ2, *d_dZ1;
+
+    vector<float> h_W1, h_W2, h_W3;
+    vector<float> h_b1, h_b2, h_b3;
+
+    void allocate_memory() {
+        // Weights and biases
+        CHECK(cudaMalloc(&d_W1, hidden1_size * input_size * sizeof(float));
+        CHECK(cudaMalloc(&d_W2, hidden2_size * hidden1_size * sizeof(float));
+        CHECK(cudaMalloc(&d_W3, output_size * hidden2_size * sizeof(float));
+        
+        CHECK(cudaMalloc(&d_b1, hidden1_size * sizeof(float));   
+        CHECK(cudaMalloc(&d_b2, hidden2_size * sizeof(float));
+        CHECK(cudaMalloc(&d_b3, output_size * sizeof(float));
+    }
+
+    void initialize_weights() {
+        random_device rd;
+        mt19937 gen(rd());
+        normal_distribution<float> d(0, 0.01);
+
+        // Xavier/Glorot initialization
+        h_W1.resize(hidden1_size * input_size);
+        h_W2.resize(hidden2_size * hidden1_size);
+        h_W3.resize(output_size * hidden2_size);
+        
+        h_b1.resize(hidden1_size, 0.0f);
+        h_b2.resize(hidden2_size, 0.0f);
+        h_b3.resize(output_size, 0.0f);
+
+        for (int i = 0; i < h_W1.size(); ++i) {
+            h_W1[i] = d(gen) * sqrt(2.0f / (input_size + hidden1_size));
+        }
+
+        for (int i = 0; i < h_W2.size(); ++i) {
+            h_W2[i] = d(gen) * sqrt(2.0f / (hidden1_size + hidden2_size));
+        }
+
+        for (int i = 0; i < h_W3.size(); ++i) {
+            h_W3[i] = d(gen) * sqrt(2.0f / (hidden2_size + output_size));
+        }
+
+        CHECK(cudaMemcpy(d_W1, h_W1.data(), h_W1.size() * sizeof(float), cudaMemcpyHostToDevice));
+        CHECK(cudaMemcpy(d_W2, h_W2.data(), h_W2.size() * sizeof(float), cudaMemcpyHostToDevice));
+        CHECK(cudaMemcpy(d_W3, h_W3.data(), h_W3.size() * sizeof(float), cudaMemcpyHostToDevice));
+
+        CHECK(cudaMemcpy(d_b1, h_b1.data(), h_b1.size() * sizeof(float), cudaMemcpyHostToDevice));
+        CHECK(ccudaMemcpy(d_b2, h_b2.data(), h_b2.size() * sizeof(float), cudaMemcpyHostToDevice));
+        CHECK(cudaMemcpy(d_b3, h_b3.data(), h_b3.size() * sizeof(float), cudaMemcpyHostToDevice));
+    }
+
+    void forward_propagation() {
+        CHECK(cudaMemcpy(d_input, h_input, input_size * sizeof(float), cudaMemcpyHostToDevice));
+        // First hidden layer
+        dim3 blockDim(16, 16);
+        dim3 gridDim1((input_size + blockDim.x - 1) / blockDim.x, 
+                     (hidden1_size + blockDim.y - 1) / blockDim.y);
+        
+        matrix_multiply_kernel<<<gridDim1, blockDim>>>(d_W1, d_input, d_b1, d_z1,
+                                                      hidden1_size, input_size, 1);
+        
+        // ReLU activation
+        int blocks1 = (hidden1_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        relu_kernel<<<blocks1, BLOCK_SIZE>>>(d_z1, d_a1, hidden1_size);
+        
+        // Second hidden layer
+        dim3 gridDim2((hidden1_size + blockDim.x - 1) / blockDim.x,
+                     (hidden2_size + blockDim.y - 1) / blockDim.y);
+        
+        matrix_multiply_kernel<<<gridDim2, blockDim>>>(d_W2, d_a1, d_b2, d_z2,
+                                                      hidden2_size, hidden1_size, 1);
+        
+        // ReLU activation
+        int blocks2 = (hidden2_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        relu_kernel<<<blocks2, BLOCK_SIZE>>>(d_z2, d_a2, hidden2_size);
+        
+        // Output layer
+        dim3 gridDim3((hidden2_size + blockDim.x - 1) / blockDim.x,
+                     (output_size + blockDim.y - 1) / blockDim.y);
+        
+        matrix_multiply_kernel<<<gridDim3, blockDim>>>(d_W3, d_a2, d_b3, d_z3,
+                                                      output_size, hidden2_size, 1);
+        
+        // Softmax
+        int blocks3 = (output_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        softmax_kernel<<<blocks3, BLOCK_SIZE>>>(d_z3, d_output, output_size);
+    }
+
+    void back_propagation() {
+        
+    }
+
+public: 
+    NeuralNetworkCUDA() {
+        allocate_gpu_memory();
+        initialize_weights();
+    }
+
+    ~NeuralNetworkCUDA() {
+        // Free GPU memory
+        cudaFree(d_W1); cudaFree(d_W2); cudaFree(d_W3);
+        cudaFree(d_b1); cudaFree(d_b2); cudaFree(d_b3);
+        cudaFree(d_input); cudaFree(d_z1); cudaFree(d_a1);
+        cudaFree(d_z2); cudaFree(d_a2); cudaFree(d_z3);
+        cudaFree(d_output); cudaFree(d_target);
+        cudaFree(d_dZ3); cudaFree(d_dZ2); cudaFree(d_dZ1);
+    }
+
+    void train(const vector<vector<float>>& training_data,
+               const vector<int>& labels,
+               int epochs = 5,
+               float learning_rate = 0.01) {
+        // Prepare target vectors (one-hot encoding)
+        vector<vector<float>> target_vectors(labels.size(), vector<float>(output_size, 0.0f));
+        for(size_t i = 0; i < labels.size(); i++) {
+            target_vectors[i][labels[i]] = 1.0f;
+        }
+
+        // Training loop
+        for(int epoch = 0; epoch < epochs; epoch++) {
+            float total_loss = 0.0f;
+            
+            for(size_t i = 0; i < training_data.size(); i++) {
+                // Copy input data and target to GPU
+                CHECK(cudaMemcpy(d_input, training_data[i].data(), input_size * sizeof(float), cudaMemcpyHostToDevice));
+                CHECK(cudaMemcpy(d_target, target_vectors[i].data(), output_size * sizeof(float), cudaMemcpyHostToDevice));
+
+                // Forward pass
+                forward_propagation();
+
+                // Backward pass
+                back_propagation();
+
+                // Calculate loss (cross entropy)
+                vector<float> output(output_size);
+                cudaMemcpy(output.data(), d_output, output_size * sizeof(float), cudaMemcpyDeviceToHost);
+                
+                float batch_loss = 0.0f;
+                for(int j = 0; j < output_size; j++) {
+                    if(target_vectors[i][j] > 0) {
+                        batch_loss -= log(max(output[j], 1e-7f));
+                    }
+                }
+                total_loss += batch_loss;
+            }
+
+            // Print epoch statistics
+            cout << "Epoch " << epoch + 1 
+                    << ", Average Loss: " << total_loss / training_data.size() 
+                    << ", Accuracy: " << static_cast<double>(correct_pred) / training_data.size() 
+                    << ", Epoch Time: " << epoch_duration.count() << " ms"
+                    << endl;
+        }
+    }
+};
 
 bool loadFashionMNIST(vector<vector<float>>& images,
                       vector<int>& labels,

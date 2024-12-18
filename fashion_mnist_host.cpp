@@ -4,6 +4,7 @@
 #include <random>
 #include <cmath>
 #include <fstream>
+#include <chrono>
 
 using namespace std;
 
@@ -38,17 +39,17 @@ private:
     }
 
     void initialize_weights() {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::normal_distribution<> d(0, 0.01);
+        random_device rd;
+        mt19937 gen(rd());
+        normal_distribution<> d(0, 0.01);
 
         // Xavier/Glorot initialization
         W1 = Eigen::MatrixXd::NullaryExpr(hidden1_size, input_size, 
-            [&]() { return d(gen) * std::sqrt(2.0 / (input_size + hidden1_size)); });
+            [&]() { return d(gen) * sqrt(2.0 / (input_size + hidden1_size)); });
         W2 = Eigen::MatrixXd::NullaryExpr(hidden2_size, hidden1_size, 
-            [&]() { return d(gen) * std::sqrt(2.0 / (hidden1_size + hidden2_size)); });
+            [&]() { return d(gen) * sqrt(2.0 / (hidden1_size + hidden2_size)); });
         W3 = Eigen::MatrixXd::NullaryExpr(output_size, hidden2_size, 
-            [&]() { return d(gen) * std::sqrt(2.0 / (hidden2_size + output_size)); });
+            [&]() { return d(gen) * sqrt(2.0 / (hidden2_size + output_size)); });
 
         b1 = Eigen::VectorXd::Zero(hidden1_size);
         b2 = Eigen::VectorXd::Zero(hidden2_size);
@@ -76,14 +77,17 @@ public:
         return output;
     }
 
-    void train(const std::vector<std::vector<double>>& training_data, 
-               const std::vector<int>& labels, 
-               int epochs = 5, 
+    void train(const vector<vector<double>>& training_data, 
+               const vector<int>& labels, 
+               int epochs = 10, 
                double learning_rate = 0.01) {
+
         for (int epoch = 0; epoch < epochs; ++epoch) {
+            auto epoch_start = std::chrono::high_resolution_clock::now();
+
             double total_loss = 0.0;
-            // std::cout << "Epoch" << epoch << endl;
             int correct_pred = 0;
+
             for (size_t i = 0; i < training_data.size(); ++i) {
                 Eigen::VectorXd input = Eigen::Map<const Eigen::VectorXd>(training_data[i].data(), input_size);
 
@@ -136,15 +140,20 @@ public:
                     correct_pred++;
                 }
             }
+            
+            auto epoch_end = std::chrono::high_resolution_clock::now();
+            auto epoch_duration = std::chrono::duration_cast<std::chrono::milliseconds>(epoch_end - epoch_start);
 
-            std::cout << "Epoch " << epoch + 1 
-                        << ", Average Loss: " << total_loss / training_data.size() 
-                        << ", Accuracy: " << static_cast<double>(correct_pred) / training_data.size() 
-                        << std::endl;
+            cout << "Epoch " << epoch + 1 
+                    << ", Average Loss: " << total_loss / training_data.size() 
+                    << ", Accuracy: " << static_cast<double>(correct_pred) / training_data.size() 
+                    << ", Epoch Time: " << epoch_duration.count() << " ms"
+                    << endl;
         }
     }
 
-    int predict(const std::vector<double>& input) {
+
+    int predict(const vector<double>& input) {
         Eigen::VectorXd eigen_input = Eigen::Map<const Eigen::VectorXd>(input.data(), input_size);
         Eigen::VectorXd output = forward_propagation(eigen_input);
         
@@ -190,7 +199,7 @@ bool loadFashionMNIST(vector<vector<double>>& images,
             unsigned char pixel = 0;
             file_images.read(reinterpret_cast<char*>(&pixel), sizeof(pixel));
             if (file_images.fail()) {
-                std::cerr << "Error reading image data." << std::endl;
+                cerr << "Error reading image data." << endl;
                 return false;
             }
             images[i][j] = pixel / 255.0; // Normalize to [0, 1]
@@ -199,12 +208,11 @@ bool loadFashionMNIST(vector<vector<double>>& images,
         unsigned char label = 0;
         file_labels.read(reinterpret_cast<char*>(&label), sizeof(label));
         if (file_labels.fail()) {
-            std::cerr << "Error reading label data." << std::endl;
+            cerr << "Error reading label data." << endl;
             return false;
         }
         labels[i] = static_cast<int>(label);
     }
-    
     return true;
 }
 
@@ -216,13 +224,15 @@ int main() {
     const string label_file = "train-labels-idx1-ubyte";
     
     if (loadFashionMNIST(images, labels, image_file, label_file)) {
-        std::cout << "Loaded " << images.size() << " training samples.\n";
-        // std::cout << "Printing the first 20 samples:\n";
+        cout << "Loaded " << images.size() << " training samples.\n";
+        // cout << "Printing the first 20 samples:\n";
         // printTrainingData(images, labels, 20);
         NeuralNetwork nn;
+        nn.batch_train(images, labels);
         nn.train(images, labels);
+
     } else {
-        std::cout << "Failed to load Fashion-MNIST dataset." << std::endl;
+        cout << "Failed to load Fashion-MNIST dataset." << endl;
     }
 
     return 0;
