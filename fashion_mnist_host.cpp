@@ -228,7 +228,7 @@ int main() {
         // cout << "Printing the first 20 samples:\n";
         // printTrainingData(images, labels, 20);
         NeuralNetwork nn;
-        nn.batch_train(images, labels);
+        // nn.batch_train(images, labels);
         nn.train(images, labels);
 
     } else {
