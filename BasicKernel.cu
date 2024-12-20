@@ -286,12 +286,16 @@ public:
 
             double total_loss = 0.0;
             int correct_pred = 0;
-
+            
             for (size_t i = 0; i < training_data.size(); ++i) {
                 float *d_input, *d_target;
                 CHECK(cudaMalloc(&d_input, input_size * sizeof(float)));
-                CHECK(cudaMalloc(&d_target, output_size * sizeof(float)));
+                // if (training_data[i].size() != input_size) {
+                //     cout << "Mismatch between input size and training_data";
+                //     exit(EXIT_FAILURE);
+                // }
 
+                CHECK(cudaMalloc(&d_target, output_size * sizeof(float)));
                 CHECK(cudaMemcpy(d_input, training_data[i].data(), input_size * sizeof(float), cudaMemcpyHostToDevice));
 
                 vector<float> h_target(output_size, 0.0f);
@@ -304,7 +308,15 @@ public:
                 dim3 gridDim3((output_size + blockDim.x - 1) / blockDim.x);
                 
                 forward_propagation_kernel(d_input, d_W1, d_b1, d_W2, d_b2, d_W3, d_b3, d_z1, d_a1, d_z2, d_a2, d_z3, d_output, input_size, hidden1_size, hidden2_size, output_size);
-                backward_propagation_kernel<<<gridDim3, blockDim>>>(d_input, d_target, d_W1, d_b1, d_W2, d_b2, d_W3, d_b3, d_output, d_a1, d_a2, learning_rate, input_size, hidden1_size, hidden2_size, output_size);
+                CHECK(cudaDeviceSynchronize());
+
+                size_t shared_mem_size = (output_size + hidden2_size + hidden1_size) * sizeof(float);
+                backward_propagation_kernel<<<gridDim3, blockDim, shared_mem_size>>>(
+                    d_input, d_target, d_W1, d_b1, d_W2, d_b2, d_W3, d_b3, d_output, d_a1, d_a2,
+                    learning_rate, input_size, hidden1_size, hidden2_size, output_size);
+                CHECK(cudaDeviceSynchronize());            
+                // backward_propagation_kernel<<<gridDim3, blockDim>>>(d_input, d_target, d_W1, d_b1, d_W2, d_b2, d_W3, d_b3, d_output, d_a1, d_a2, learning_rate, input_size, hidden1_size, hidden2_size, output_size);
+                // CHECK(cudaDeviceSynchronize());
 
                 cudaFree(d_input);
                 cudaFree(d_target);
