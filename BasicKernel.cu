@@ -317,9 +317,32 @@ public:
                 CHECK(cudaDeviceSynchronize());            
                 // backward_propagation_kernel<<<gridDim3, blockDim>>>(d_input, d_target, d_W1, d_b1, d_W2, d_b2, d_W3, d_b3, d_output, d_a1, d_a2, learning_rate, input_size, hidden1_size, hidden2_size, output_size);
                 // CHECK(cudaDeviceSynchronize());
+              // Copy output từ GPU về CPU
+              vector<float> h_output(output_size);
+              CHECK(cudaMemcpy(h_output.data(), d_output, output_size * sizeof(float), cudaMemcpyDeviceToHost));
 
-                cudaFree(d_input);
-                cudaFree(d_target);
+              // Cal Loss
+              double loss = 0.0;
+              for (int j = 0; j < output_size; ++j) {
+                  loss += -h_target[j] * log(h_output[j] + 1e-8); 
+              }
+              total_loss += loss;
+
+              // Cal accuracy
+              int predicted_label = 0;
+              float max_value = h_output[0];
+              for (int j = 1; j < output_size; ++j) {
+                  if (h_output[j] > max_value) {
+                      max_value = h_output[j];
+                      predicted_label = j;
+                  }
+              }
+
+              if (predicted_label == labels[i]) {
+                  ++correct_pred;
+              }
+              cudaFree(d_input);
+              cudaFree(d_target);
             }
 
             auto epoch_end = chrono::high_resolution_clock::now();
