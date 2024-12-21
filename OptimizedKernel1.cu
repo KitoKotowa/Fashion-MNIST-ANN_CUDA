@@ -21,7 +21,6 @@ using namespace std;
 }
 
 #define BLOCK_SIZE 256
-#define TILE_WIDTH 32
 
 int find_max_element_index(const std::vector<float>& h_output) {
     float max_val = h_output[0];
@@ -86,40 +85,6 @@ __global__ void matrix_multiply_kernel(float* A, float* B, float* C, float* bias
     }
 }
 
-__global__ void matrix_multiply_atomic_kernel(float* A, float* B, float* C, float* bias, int M, int N, int K) {
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    extern __shared__ float shared_A[];
-    float *shared_B = &shared_A[blockDim.y * N];
-    
-    if (row < M && col < K) {
-        float sum = 0.0f;
-        
-        // Tile the computation
-        for (int tile = 0; tile < (N + blockDim.x - 1) / blockDim.x; ++tile) {
-            // Load tile into shared memory
-            int tileIdx = tile * blockDim.x + threadIdx.x;
-            if (tileIdx < N && row < M) {
-                shared_A[threadIdx.y * N + tileIdx] = A[row * N + tileIdx];
-            }
-            if (tileIdx < N && col < K) {
-                shared_B[threadIdx.y * K + col] = B[tileIdx * K + col];
-            }
-            __syncthreads();
-            
-            // Compute partial dot product
-            for (int k = 0; k < blockDim.x && (tile * blockDim.x + k) < N; ++k) {
-                sum += shared_A[threadIdx.y * N + k] * shared_B[k * K + threadIdx.x];
-            }
-            __syncthreads();
-        }
-        
-        // Atomic update of output
-        atomicAdd(&C[row * K + col], sum + bias[row]);
-    }
-}
-
 __global__ void relu_kernel(float* input, float* output, int size) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < size) {
@@ -134,7 +99,6 @@ void forward_propagation_kernel(float* input, float* W1, float* b1, float* W2, f
                     (hidden1_size + blockDim.y - 1) / blockDim.y);
         
         matrix_multiply_kernel<<<gridDim1, blockDim>>>(W1, input, z1, b1, hidden1_size, input_size, 1);
-        // matrix_multiply_tiled_kernel<<<gridDim1, blockDim>>>(W1, input, z1, b1, hidden1_size, input_size, 1);
 
         // ReLU activation
         int blocks1 = (hidden1_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
@@ -145,8 +109,6 @@ void forward_propagation_kernel(float* input, float* W1, float* b1, float* W2, f
                     (hidden2_size + blockDim.y - 1) / blockDim.y);
         
         matrix_multiply_kernel<<<gridDim2, blockDim>>>(W2, a1, z2, b2, hidden2_size, hidden1_size, 1);
-        // matrix_multiply_tiled_kernel<<<gridDim2, blockDim>>>(W2, a1, z2, b2, hidden2_size, hidden1_size, 1);
-
 
         // ReLU activation
         int blocks2 = (hidden2_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
@@ -157,7 +119,6 @@ void forward_propagation_kernel(float* input, float* W1, float* b1, float* W2, f
                     (output_size + blockDim.y - 1) / blockDim.y);
         
         matrix_multiply_kernel<<<gridDim3, blockDim>>>(W3, a2, z3, b3, output_size, hidden2_size, 1);
-        // matrix_multiply_tiled_kernel<<<gridDim3, blockDim>>>(W3, a2, z3, b3, output_size, hidden2_size, 1);
 
         // Softmax
         int blocks3 = (output_size + BLOCK_SIZE - 1) / BLOCK_SIZE;
@@ -350,10 +311,8 @@ public:
                     input_size, hidden1_size, hidden2_size, output_size);
 
                 CHECK(cudaDeviceSynchronize());            
-                // backward_propagation_kernel<<<gridDim3, blockDim>>>(d_input, d_target, d_W1, d_b1, d_W2, d_b2, d_W3, d_b3, d_output, d_a1, d_a2, learning_rate, input_size, hidden1_size, hidden2_size, output_size);
-                // CHECK(cudaDeviceSynchronize());
-              // Copy output từ GPU về CPU
 
+              // Copy output từ GPU về CPU
               vector<float> h_output(output_size);
               CHECK(cudaMemcpy(h_output.data(), d_output, output_size * sizeof(float), cudaMemcpyDeviceToHost));
 
